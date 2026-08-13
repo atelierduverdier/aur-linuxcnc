@@ -1,0 +1,91 @@
+# Mainteneur : Atelier du Verdier
+#
+# =========================================================================
+# POURQUOI CE PAQUET EXISTE
+# =========================================================================
+# Arch a suivi Qt6 et ne fournit plus que `python-qscintilla-qt6`. Or qtvcp
+# — l'interface de LinuxCNC, dont qtdragon_hd — est en PyQt5, et son éditeur
+# de G-code fait :
+#
+#     from PyQt5.Qsci import QsciScintilla, QsciLexerCustom, QsciLexerPython
+#
+# En cas d'échec il appelle `sys.exit(1)`. Pas de dégradation : TOUT écran
+# qtvcp meurt avec lui. Rien dans l'AUR ne comble le trou (cherché le
+# 13/08/2026).
+#
+# La bibliothèque C++ est là, elle : `qscintilla-qt5` est dans `extra`. Il ne
+# manque que les liaisons Python. C'est tout ce que ce paquet fabrique.
+#
+# =========================================================================
+# LE PIÈGE : L'ARCHIVE EMBARQUE TOUT LE C++
+# =========================================================================
+# La sdist PyPI contient `src/` et `scintilla/`, les sources de la
+# bibliothèque C++. Et `project.py` décide de son mode ainsi (ligne 42) :
+#
+#     self.qsci_external_lib = not os.path.isdir('src')
+#
+# Construite telle quelle, elle recompilerait sa PROPRE
+# `libqscintilla2_qt5.so` et l'installerait par-dessus celle du système —
+# deux bibliothèques pour un seul en-tête, et un conflit de fichiers avec
+# `qscintilla-qt5`.
+#
+# D'où le `rm -rf src scintilla` de prepare() : il bascule le projet en mode
+# « bibliothèque externe », où il se contente de se lier à celle qui est déjà
+# installée. C'est la seule façon de n'obtenir QUE les liaisons.
+#
+# =========================================================================
+# LE SECOND PIÈGE : QUEL Qt ?
+# =========================================================================
+# `project.py` ligne 91 choisit le fichier .sip d'après la version de Qt que
+# lui rend qmake :
+#
+#     qt6 = (project.builder.qt_version >= 0x060000)
+#     self.sip_file = 'qscimod6.sip' if qt6 else 'qscimod5.sip'
+#
+# `/usr/bin/qmake` est en Qt5 aujourd'hui, mais rien ne le garantit demain.
+# `--qmake /usr/bin/qmake-qt5` est donc explicite : sans lui, une mise à jour
+# d'Arch produirait un jour des liaisons Qt6 sans que rien ne le signale, et
+# qtvcp échouerait exactement comme avant.
+# =========================================================================
+
+pkgname=python-qscintilla-qt5
+_pkgname=QScintilla
+pkgver=2.14.1
+pkgrel=1
+pkgdesc="Liaisons Python (PyQt5) pour QScintilla — retirées d'Arch, requises par qtvcp/LinuxCNC"
+arch=(x86_64)
+url="https://www.riverbankcomputing.com/software/qscintilla/"
+license=(GPL3)
+depends=(python-pyqt5 python-pyqt5-sip qscintilla-qt5)
+makedepends=(sip pyqt-builder qt5-base)
+source=("https://files.pythonhosted.org/packages/a9/f6/a7aa4b495dcee4c521b87205de9363fb62ee5fdc8eab91d4ddb97257c85b/$_pkgname-$pkgver.tar.gz")
+sha256sums=('2c120a56d60363ff4bc73b8a763dc69fae5f84681c24efcb03064c7df103052b')
+
+prepare() {
+  cd "$_pkgname-$pkgver"
+  # Voir l'en-tête : c'est ce retrait qui bascule le projet en mode
+  # « bibliothèque externe ». Sans lui, conflit de fichiers avec
+  # qscintilla-qt5.
+  rm -rf src scintilla
+}
+
+build() {
+  cd "$_pkgname-$pkgver"
+  sip-build \
+    --qmake /usr/bin/qmake-qt5 \
+    --qsci-include-dir /usr/include/qt \
+    --qsci-library-dir /usr/lib \
+    --qsci-features-dir /usr/lib/qt/mkspecs/features \
+    --no-make \
+    --verbose
+  make -C build
+}
+
+package() {
+  cd "$_pkgname-$pkgver"
+  make -C build INSTALL_ROOT="$pkgdir" install
+  # Les fichiers .api (complétion) sont DÉJÀ livrés par qscintilla-qt5 —
+  # quinze fichiers dans /usr/share/qt/qsci/api/. Ne pas les redéposer : ce
+  # serait un conflit, et une seconde copie à vieillir.
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

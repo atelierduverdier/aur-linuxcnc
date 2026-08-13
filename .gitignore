@@ -1,0 +1,18 @@
+# Ce dépôt ne porte que des RECETTES : 17 Ko de PKGBUILD, de diff et de
+# notes. Tout le reste — 65 Mo sur le disque — se refabrique d'un
+# `makepkg`, et n'a donc rien à faire dans un historique.
+
+# Paquets construits. Celui de LinuxCNC pèse 41 Mo à lui seul. Il reste
+# volontairement sur le disque comme repli si un build futur échoue, mais
+# un binaire ne se versionne pas : il se reconstruit.
+*.pkg.tar.zst
+*.pkg.tar.xz
+
+# Archives sources téléchargées — le PKGBUILD porte leur URL et leur
+# somme de contrôle, ce qui suffit à les retrouver à l'identique.
+*.tar.gz
+*.tar.bz2
+
+# Dossiers de travail de makepkg
+src/
+pkg/

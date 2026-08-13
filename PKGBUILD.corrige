@@ -1,0 +1,131 @@
+# Maintainer: Gonçalo Pereira <you@example.com>
+# Contributor: Fabio 'Lolix' Loli <fabio.loli@disroot.org>
+
+pkgname=linuxcnc
+pkgver=2.9.10
+pkgrel=1
+pkgdesc="Controls CNC machines (mills, lathes, 3D printers, robots, etc.)"
+arch=(x86_64)
+url="https://linuxcnc.org/"
+license=(GPL2 custom)
+depends=(
+  glibc python gtk3 libusb libxss python-cairo gobject-introspection-runtime
+  dbus-python python-pillow libxmu python-gobject tk python-matplotlib boost-libs
+  python-numpy gstreamer at-spi2-core libepoxy libtirpc libxft harfbuzz fontconfig
+  gdk-pixbuf2 libxext librsvg glib2 zlib cairo readline systemd-libs freetype2
+  libx11 libxinerama python-configobj libgpiod python-yapps2 tcl pango bwidget
+  python-opengl
+  # --- ajouts de l'atelier, 13/08/2026 -----------------------------------
+  # python-pyqt5 : qtvcp ne demarre pas sans lui. `linuxcnc <ini>` avec un
+  # DISPLAY qtvcp mourait sur « ModuleNotFoundError: No module named
+  # 'PyQt5' », apres avoir pourtant charge les modules temps reel et HAL :
+  # seul l'affichage tombe, ce qui rend la panne trompeuse.
+  python-pyqt5
+  # tclx : etait en MAKEDEPENDS, ce qui est faux. `latency-histogram` fait un
+  # `package require Tclx` SEC a l'execution -- sans lui il ne demarre pas.
+  # (`hal-histogram`, lui, l'entoure d'un `catch` et s'en passe.) En
+  # makedepends il ressortait orphelin apres le build, et son epinglage
+  # `tcl=<version exacte>` bloquait alors toute mise a jour du systeme des
+  # que CachyOS republiait tcl avec son suffixe znver4. Vu le 13/08/2026.
+  tclx
+  # python-xlib : OBLIGATOIRE pour gmoccapy, qui refuse de demarrer sans
+  # (« missing xlib, run sudo apt install python3-xlib », puis extinction).
+  # qtvcp, lui, s'en contente d'un avertissement -- d'ou la tentation de le
+  # ranger en optionnel. C'est faux des qu'on emploie une interface GTK.
+  python-xlib
+)
+# QSCINTILLA MANQUE, ET ON NE PEUT RIEN Y FAIRE ICI.
+# qtvcp/widgets/gcode_editor.py fait `from PyQt5.Qsci import ...` et, en cas
+# d'echec, appelle `sys.exit(1)` -- pas de degradation possible, tout ecran
+# qtvcp meurt avec lui. Or Arch a suivi Qt6 : il ne reste que
+# `python-qscintilla-qt6`, et l'AUR n'a rien pour Qt5 (cherche le
+# 13/08/2026). Il n'existe donc AUCUN paquet a mettre ici.
+# Deux voies, aucune dans ce PKGBUILD : construire soi-meme les liaisons
+# PyQt5 de QScintilla, ou choisir un DISPLAY hors qtvcp (`axis`, en Tk, qui
+# n'a besoin de rien de plus).
+makedepends=(intltool boost asciidoc glu procps-ng psmisc libtirpc)
+optdepends=(
+  'python-pyqt5-webengine: navigateur integre de qtvcp (absent des depots Arch)'
+)
+options=(!strip)
+
+source=(
+  "$pkgname-$pkgver.tar.gz::https://github.com/LinuxCNC/linuxcnc/archive/refs/tags/v$pkgver.tar.gz"
+  "unredestributable.txt"
+)
+
+sha256sums=('9d1f7a9177ab133de340dcdc9036c9f225eb48aabfcbc87a3df3c78dcd226f24'
+            '228a035c143ccbdd6056e1189267b034f046742cae034bff821eccc8dbc68ee3')
+
+prepare() {
+  cd "$srcdir/$pkgname-$pkgver/src"
+
+  # libtirpc (glibc no longer provides SunRPC)
+  export CPPFLAGS="-I/usr/include/tirpc"
+  export CFLAGS="-I/usr/include/tirpc"
+  export LDFLAGS="-ltirpc"
+  
+  ./autogen.sh
+
+  # PYTHON forcé : la liste de versions de configure s'arrête à 3.13, or Arch
+  # est en 3.14. Il retombait sur le python3.12 installé pour autre chose, où
+  # ni « gi » ni boost_python314 n'existent — d'où « Python pango module not
+  # found ». Correctif local, à refaire si le paquet AUR est mis à jour.
+  PYTHON=/usr/bin/python3 \
+  ./configure \
+    --prefix=/usr \
+    --enable-non-distributable=yes \
+    --with-realtime=uspace \
+    --without-libmodbus \
+    --disable-gtk2
+}
+
+build() {
+  cd "$srcdir/$pkgname-$pkgver/src"
+  make
+}
+
+package() {
+  cd "$srcdir/$pkgname-$pkgver/src"
+  DESTDIR="$pkgdir" make install
+
+  # License
+  install -Dm644 "$srcdir/unredestributable.txt" \
+    "$pkgdir/usr/share/licenses/$pkgname/unredestributable.txt"
+
+  # Desktop menu
+  install -Dm644 ../share/menus/CNC.menu \
+    "$pkgdir/etc/xdg/menus/CNC.menu"
+
+  # Tcl path fix (TCLLIBPATH is space-separated)
+  install -Dm644 /dev/stdin "$pkgdir/etc/profile.d/linuxcnc.sh" <<'EOF'
+[[ " $TCLLIBPATH " != *" /usr/lib/tcltk/linuxcnc "* ]] && \
+export TCLLIBPATH="/usr/lib/tcltk/linuxcnc $TCLLIBPATH"
+EOF
+
+  # Fix Python path (dist-packages → site-packages)
+  pyver=$(python -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
+  if [[ -d "$pkgdir/usr/lib/python3/dist-packages" ]]; then
+    mkdir -p "$pkgdir/usr/lib/python$pyver/site-packages"
+    mv "$pkgdir/usr/lib/python3/dist-packages/"* "$pkgdir/usr/lib/python$pyver/site-packages/"
+    rmdir "$pkgdir/usr/lib/python3/dist-packages" || true
+  fi
+
+  # Ensure hallib and modules are in /usr/lib/linuxcnc
+  mkdir -p "$pkgdir/usr/lib/linuxcnc/modules"
+  cp -a ../rtlib/*.so "$pkgdir/usr/lib/linuxcnc/modules/"
+
+  # Install manpages
+  install -Dm644 ../docs/man/man1/*.1 "$pkgdir/usr/share/man/man1"
+  install -Dm644 ../docs/man/man3/* "$pkgdir/usr/share/man/man3"
+  install -Dm644 ../docs/man/man9/* "$pkgdir/usr/share/man/man9"
+
+  # Fix: Remove /lib directory (Arch uses /usr/lib, /lib is a symlink)
+  # Move any contents to /usr/lib if they exist, then remove /lib
+  if [[ -d "$pkgdir/lib" ]]; then
+    if [[ -n "$(ls -A "$pkgdir/lib")" ]]; then
+      cp -a "$pkgdir/lib/"* "$pkgdir/usr/lib/"
+    fi
+    rm -rf "$pkgdir/lib"
+  fi
+}
